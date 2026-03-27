@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Home Tour</title>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', Arial, sans-serif; color: #fff; }
+  canvas#renderCanvas { width: 100vw; height: 100vh; display: block; touch-action: none; opacity: 0; transition: opacity 0.8s ease; }
+  canvas#renderCanvas.visible { opacity: 1; }
+
+  /* Loading Screen */
+  #loadingScreen {
+    position: fixed; inset: 0; z-index: 1000; background: #000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    transition: opacity 0.6s ease;
+  }
+  #loadingScreen.hidden { opacity: 0; pointer-events: none; }
+  #loadingScreen h1 { font-size: 28px; font-weight: 300; letter-spacing: 4px; text-transform: uppercase; margin-bottom: 40px; color: #e0e0e0; }
+  #projectInput {
+    width: 320px; padding: 12px 16px; font-size: 15px; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15); border-radius: 8px; color: #fff;
+    outline: none; text-align: center; margin-bottom: 30px; transition: border-color 0.3s;
+  }
+  #projectInput::placeholder { color: rgba(255,255,255,0.3); }
+  #projectInput:focus { border-color: rgba(255,255,255,0.4); }
+
+  #dropZone {
+    width: 420px; height: 200px; border: 2px dashed rgba(255,255,255,0.15);
+    border-radius: 16px; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; cursor: pointer; transition: all 0.3s; position: relative;
+  }
+  #dropZone:hover, #dropZone.dragover { border-color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.03); }
+  #dropZone svg { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.4; }
+  #dropZone p { font-size: 14px; color: rgba(255,255,255,0.4); }
+  #dropZone .sub { font-size: 12px; margin-top: 8px; color: rgba(255,255,255,0.2); }
+  #fileInput { display: none; }
+
+  #progressWrap {
+    width: 320px; height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px;
+    margin-top: 30px; overflow: hidden; opacity: 0; transition: opacity 0.3s;
+  }
+  #progressWrap.active { opacity: 1; }
+  #progressBar { width: 0%; height: 100%; background: #fff; border-radius: 2px; transition: width 0.3s ease; }
+  #progressText { margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.3); opacity: 0; transition: opacity 0.3s; }
+  #progressText.active { opacity: 1; }
+
+  /* Tour UI */
+  #tourUI { position: fixed; inset: 0; z-index: 100; pointer-events: none; opacity: 0; transition: opacity 0.5s; }
+  #tourUI.visible { opacity: 1; }
+  #tourUI > * { pointer-events: auto; }
+
+  #projectLabel {
+    position: absolute; top: 20px; left: 24px; font-size: 13px; font-weight: 600;
+    letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.7);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+
+  #topRight { position: absolute; top: 16px; right: 20px; display: flex; gap: 8px; }
+  .uiBtn {
+    width: 40px; height: 40px; border-radius: 10px; border: none; cursor: pointer;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center; transition: background 0.2s;
+  }
+  .uiBtn:hover { background: rgba(0,0,0,0.65); }
+  .uiBtn svg { width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  #controlHint {
+    position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(8px); padding: 10px 20px; border-radius: 8px;
+    transition: opacity 1s ease; text-align: center; line-height: 1.6;
+  }
+  #controlHint.fade { opacity: 0; }
+
+  /* Minimap */
+  #minimapWrap {
+    position: absolute; bottom: 20px; right: 20px; width: 180px; height: 180px;
+    border-radius: 12px; overflow: hidden; background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.08);
+    transition: opacity 0.3s;
+  }
+  #minimapWrap.hidden { opacity: 0; pointer-events: none; }
+  #minimapCanvas { width: 100%; height: 100%; }
+
+  /* Crosshair */
+  #crosshair {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.5);
+    z-index: 101; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  }
+  #crosshair.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- Loading Screen -->
+<div id="loadingScreen">
+  <h1>3D Home Tour</h1>
+  <input type="text" id="projectInput" placeholder="Project name" maxlength="60">
+  <div id="dropZone">
+    <svg viewBox="0 0 48 48" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5">
+      <path d="M24 32V12M24 12L16 20M24 12L32 20"/>
+      <path d="M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4"/>
+    </svg>
+    <p>Drop .glb file here</p>
+    <p class="sub">or click to browse</p>
+  </div>
+  <input type="file" id="fileInput" accept=".glb,.gltf">
+  <div id="progressWrap"><div id="progressBar"></div></div>
+  <p id="progressText">Loading model...</p>
+</div>
+
+<!-- Tour UI -->
+<div id="tourUI">
+  <div id="projectLabel"></div>
+  <div id="topRight">
+    <button class="uiBtn" id="btnFullscreen" title="Fullscreen">
+      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3"/></svg>
+    </button>
+    <button class="uiBtn" id="btnReset" title="Reset position">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+    </button>
+    <button class="uiBtn" id="btnMinimap" title="Toggle minimap">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>
+    </button>
+  </div>
+  <div id="controlHint">
+    <strong>WASD / ZQSD</strong> — Move &nbsp;&bull;&nbsp; <strong>Mouse</strong> — Look around &nbsp;&bull;&nbsp; <strong>Click</strong> — Teleport<br>
+    <strong>ESC</strong> — Release cursor &nbsp;&bull;&nbsp; Click canvas to lock cursor
+  </div>
+  <div id="minimapWrap"><canvas id="minimapCanvas" width="360" height="360"></canvas></div>
+</div>
+
+<div id="crosshair"></div>
+<canvas id="renderCanvas"></canvas>
+
+<script>
+(function() {
+  const $ = id => document.getElementById(id);
+  const canvas = $('renderCanvas');
+  const loadingScreen = $('loadingScreen');
+  const dropZone = $('dropZone');
+  const fileInput = $('fileInput');
+  const progressWrap = $('progressWrap');
+  const progressBar = $('progressBar');
+  const progressText = $('progressText');
+  const tourUI = $('tourUI');
+  const projectLabel = $('projectLabel');
+  const controlHint = $('controlHint');
+  const minimapWrap = $('minimapWrap');
+  const minimapCanvas = $('minimapCanvas');
+  const crosshair = $('crosshair');
+
+  let engine, scene, camera, spawnPos, sceneBounds;
+  let minimapVisible = true;
+
+  // Drop zone events
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file) loadModel(file);
+  });
+  fileInput.addEventListener('change', e => { if (e.target.files[0]) loadModel(e.target.files[0]); });
+
+  function loadModel(file) {
+    progressWrap.classList.add('active');
+    progressText.classList.add('active');
+    progressBar.style.width = '10%';
+
+    const url = URL.createObjectURL(file);
+    const fname = file.name;
+
+    engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true, antialias: true });
+    scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
+
+    progressBar.style.width = '25%';
+
+    // Load HDR environment
+    try {
+      const envTex = BABYLON.CubeTexture.CreateFromPrefilteredData(
+        'https://assets.babylonjs.com/environments/environmentSpecular.env', scene
+      );
+      scene.environmentTexture = envTex;
+      scene.environmentIntensity = 1.2;
+    } catch(e) { console.warn('Env texture failed:', e); }
+
+    progressBar.style.width = '35%';
+
+    BABYLON.SceneLoader.ImportMesh('', '', url, scene,
+      function onSuccess(meshes) {
+        progressBar.style.width = '80%';
+        URL.revokeObjectURL(url);
+
+        // Compute scene bounds
+        let minV = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+        let maxV = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+        meshes.forEach(m => {
+          if (!m.getBoundingInfo) return;
+          const bi = m.getBoundingInfo();
+          const wmin = bi.boundingBox.minimumWorld;
+          const wmax = bi.boundingBox.maximumWorld;
+          minV = BABYLON.Vector3.Minimize(minV, wmin);
+          maxV = BABYLON.Vector3.Maximize(maxV, wmax);
+        });
+        sceneBounds = { min: minV, max: maxV };
+
+        // Force PBR on all meshes
+        meshes.forEach(m => {
+          if (m.material && m.material instanceof BABYLON.PBRMaterial) {
+            m.material.usePhysicalLightFalloff = true;
+          }
+          m.isPickable = true;
+        });
+
+        // Setup camera
+        const cx = (minV.x + maxV.x) / 2;
+        const cz = (minV.z + maxV.z) / 2;
+        const cy = minV.y + 1.65;
+        spawnPos = new BABYLON.Vector3(cx, cy, cz);
+
+        camera = new BABYLON.UniversalCamera('cam', spawnPos.clone(), scene);
+        camera.attachControl(canvas, true);
+        camera.minZ = 0.05;
+        camera.maxZ = 1000;
+        camera.speed = 0.1;
+        camera.inertia = 0.25;
+        camera.angularSensibility = 1500;
+
+        // WASD + ZQSD
+        camera.keysUp = [87, 90]; // W, Z
+        camera.keysDown = [83];    // S
+        camera.keysLeft = [65, 81]; // A, Q
+        camera.keysRight = [68];    // D
+
+        // Add default light if scene has none
+        const hasLights = scene.lights.length > 0;
+        if (!hasLights) {
+          const dirLight = new BABYLON.DirectionalLight('dirLight', new BABYLON.Vector3(-0.5, -1, 0.5), scene);
+          dirLight.position = new BABYLON.Vector3(
+            (maxV.x + minV.x) / 2,
+            maxV.y + 5,
+            (maxV.z + minV.z) / 2
+          );
+          dirLight.intensity = 1.0;
+
+          // Shadow generator
+          try {
+            const sg = new BABYLON.ShadowGenerator(2048, dirLight);
+            sg.usePercentageCloserFiltering = true;
+            sg.filteringQuality = BABYLON.ShadowGenerator.QUALITY_MEDIUM;
+            meshes.forEach(m => {
+              if (m.getTotalVertices && m.getTotalVertices() > 0) {
+                sg.addShadowCaster(m);
+                m.receiveShadows = true;
+              }
+            });
+          } catch(e) { console.warn('Shadow setup failed:', e); }
+
+          // Hemisphere fill light
+          const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+          hemi.intensity = 0.4;
+        }
+
+        progressBar.style.width = '90%';
+
+        // Post-processing pipeline
+        try {
+          const pipeline = new BABYLON.DefaultRenderingPipeline('default', true, scene, [camera]);
+          pipeline.fxaaEnabled = true;
+          pipeline.samples = 8;
+
+          pipeline.bloomEnabled = true;
+          pipeline.bloomThreshold = 0.8;
+          pipeline.bloomWeight = 0.3;
+
+          pipeline.depthOfFieldEnabled = true;
+          pipeline.depthOfField.focalLength = 150;
+          pipeline.depthOfField.fStop = 1.4;
+          pipeline.depthOfField.focusDistance = 2000;
+          pipeline.depthOfFieldBlurLevel = BABYLON.DepthOfFieldEffectBlurLevel.Medium;
+
+          pipeline.imageProcessingEnabled = true;
+          pipeline.imageProcessing.toneMappingEnabled = true;
+          pipeline.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+          pipeline.imageProcessing.exposure = 1.1;
+          pipeline.imageProcessing.contrast = 1.15;
+          pipeline.imageProcessing.colorCurvesEnabled = true;
+          const curves = new BABYLON.ColorCurves();
+          curves.globalSaturation = 10;
+          pipeline.imageProcessing.colorCurves = curves;
+        } catch(e) { console.warn('Rendering pipeline failed:', e); }
+
+        // SSAO2
+        try {
+          const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {
+            ssaoRatio: 0.5,
+            blurRatio: 0.5
+          });
+          ssao.radius = 4;
+          ssao.totalStrength = 1.3;
+          ssao.samples = 32;
+          ssao.expensiveBlur = true;
+          scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline('ssao', camera);
+        } catch(e) { console.warn('SSAO2 failed:', e); }
+
+        progressBar.style.width = '100%';
+
+        // Pointer lock
+        canvas.addEventListener('click', () => {
+          if (!document.pointerLockElement) {
+            canvas.requestPointerLock();
+          }
+        });
+        document.addEventListener('pointerlockchange', () => {
+          crosshair.classList.toggle('visible', !!document.pointerLockElement);
+        });
+
+        // Click-to-teleport
+        scene.onPointerDown = function(evt, pickResult) {
+          if (evt.button !== 0) return;
+          if (!document.pointerLockElement) return;
+          const pick = scene.pick(scene.pointerX, scene.pointerY);
+          if (pick.hit) {
+            const target = new BABYLON.Vector3(pick.pickedPoint.x, pick.pickedPoint.y + 1.65, pick.pickedPoint.z);
+            const startPos = camera.position.clone();
+            let frame = 0;
+            const totalFrames = 12;
+            const anim = scene.onBeforeRenderObservable.add(() => {
+              frame++;
+              const t = frame / totalFrames;
+              const ease = t * t * (3 - 2 * t); // smoothstep
+              camera.position = BABYLON.Vector3.Lerp(startPos, target, ease);
+              if (frame >= totalFrames) {
+                scene.onBeforeRenderObservable.remove(anim);
+              }
+            });
+          }
+        };
+
+        // Gravity — downward raycast each frame
+        scene.onBeforeRenderObservable.add(() => {
+          const ray = new BABYLON.Ray(
+            new BABYLON.Vector3(camera.position.x, camera.position.y, camera.position.z),
+            new BABYLON.Vector3(0, -1, 0),
+            50
+          );
+          const hit = scene.pickWithRay(ray, m => m.isPickable && m !== camera);
+          if (hit && hit.hit) {
+            const desiredY = hit.pickedPoint.y + 1.65;
+            camera.position.y += (desiredY - camera.position.y) * 0.2;
+          }
+        });
+
+        // Start render loop
+        engine.runRenderLoop(() => scene.render());
+        window.addEventListener('resize', () => engine.resize());
+
+        // Transition
+        setTimeout(() => {
+          loadingScreen.classList.add('hidden');
+          canvas.classList.add('visible');
+          tourUI.classList.add('visible');
+
+          const name = $('projectInput').value.trim();
+          projectLabel.textContent = name || 'Home Tour';
+
+          // Fade control hint
+          setTimeout(() => controlHint.classList.add('fade'), 5000);
+
+          // Minimap loop
+          requestAnimationFrame(updateMinimap);
+        }, 400);
+      },
+      function onProgress(evt) {
+        if (evt.lengthComputable) {
+          const pct = 35 + (evt.loaded / evt.total) * 45;
+          progressBar.style.width = pct + '%';
+        }
+      },
+      function onError(scene, msg, ex) {
+        progressText.textContent = 'Error loading model. Please try a different .glb file.';
+        progressBar.style.width = '0%';
+        console.error('Load error:', msg, ex);
+      },
+      '.glb'
+    );
+  }
+
+  // Minimap
+  function updateMinimap() {
+    if (!scene || !camera || !minimapVisible) {
+      requestAnimationFrame(updateMinimap);
+      return;
+    }
+    const ctx = minimapCanvas.getContext('2d');
+    const w = minimapCanvas.width;
+    const h = minimapCanvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const b = sceneBounds;
+    const sx = b.max.x - b.min.x || 1;
+    const sz = b.max.z - b.min.z || 1;
+    const scale = Math.min((w - 20) / sx, (h - 20) / sz);
+
+    const toX = x => (x - b.min.x) * scale + (w - sx * scale) / 2;
+    const toZ = z => (z - b.min.z) * scale + (h - sz * scale) / 2;
+
+    // Draw mesh footprints
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 0.5;
+    scene.meshes.forEach(m => {
+      if (!m.getBoundingInfo || !m.isEnabled() || !m.isVisible) return;
+      const bi = m.getBoundingInfo();
+      const mn = bi.boundingBox.minimumWorld;
+      const mx = bi.boundingBox.maximumWorld;
+      const rx = toX(mn.x);
+      const rz = toZ(mn.z);
+      const rw = (mx.x - mn.x) * scale;
+      const rh = (mx.z - mn.z) * scale;
+      if (rw < 1 && rh < 1) return;
+      ctx.fillRect(rx, rz, rw, rh);
+      ctx.strokeRect(rx, rz, rw, rh);
+    });
+
+    // Draw player
+    const px = toX(camera.position.x);
+    const pz = toZ(camera.position.z);
+    const angle = Math.atan2(camera.getDirection(BABYLON.Vector3.Forward()).x, camera.getDirection(BABYLON.Vector3.Forward()).z);
+
+    ctx.save();
+    ctx.translate(px, pz);
+    ctx.rotate(-angle);
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(-5, 6);
+    ctx.lineTo(5, 6);
+    ctx.closePath();
+    ctx.fillStyle = '#e74c3c';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.restore();
+
+    requestAnimationFrame(updateMinimap);
+  }
+
+  // UI Buttons
+  $('btnFullscreen').addEventListener('click', () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  });
+
+  $('btnReset').addEventListener('click', () => {
+    if (camera && spawnPos) {
+      camera.position = spawnPos.clone();
+    }
+  });
+
+  $('btnMinimap').addEventListener('click', () => {
+    minimapVisible = !minimapVisible;
+    minimapWrap.classList.toggle('hidden', !minimapVisible);
+  });
+})();
+</script>
+</body>
+</html>
