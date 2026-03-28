@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D Home Tour</title>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #000; font-family: 'Segoe UI', Arial, sans-serif; color: #fff; }
+  canvas#renderCanvas { width: 100vw; height: 100vh; display: block; touch-action: none; opacity: 0; transition: opacity 0.8s ease; }
+  canvas#renderCanvas.visible { opacity: 1; }
+
+  /* ── Loading Screen ── */
+  #loadingScreen {
+    position: fixed; inset: 0; z-index: 1000; background: #000;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    transition: opacity 0.6s ease;
+  }
+  #loadingScreen.hidden { opacity: 0; pointer-events: none; }
+  #loadingScreen h1 {
+    font-size: 28px; font-weight: 300; letter-spacing: 4px;
+    text-transform: uppercase; margin-bottom: 40px; color: #e0e0e0;
+  }
+  #projectInput {
+    width: 320px; padding: 12px 16px; font-size: 15px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px; color: #fff; outline: none; text-align: center;
+    margin-bottom: 24px; transition: border-color 0.3s;
+  }
+  #projectInput::placeholder { color: rgba(255,255,255,0.3); }
+  #projectInput:focus { border-color: rgba(255,255,255,0.4); }
+
+  /* Quality selector */
+  #qualityRow { display: flex; gap: 10px; margin-bottom: 28px; }
+  .qBtn {
+    padding: 8px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+    background: transparent; color: rgba(255,255,255,0.5); cursor: pointer;
+    font-size: 13px; transition: all 0.2s;
+  }
+  .qBtn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .qBtn.active { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
+
+  /* File select button */
+  #selectBtn {
+    width: 420px; height: 180px; border: 2px dashed rgba(255,255,255,0.15);
+    border-radius: 16px; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; cursor: pointer; transition: all 0.3s; background: transparent;
+    color: #fff;
+  }
+  #selectBtn:hover { border-color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.03); }
+  #selectBtn svg { width: 48px; height: 48px; margin-bottom: 16px; opacity: 0.4; }
+  #selectBtn .main { font-size: 15px; color: rgba(255,255,255,0.5); }
+  #selectBtn .sub { font-size: 12px; margin-top: 8px; color: rgba(255,255,255,0.2); }
+
+  #progressWrap {
+    width: 420px; height: 4px; background: rgba(255,255,255,0.08);
+    border-radius: 2px; margin-top: 28px; overflow: hidden; opacity: 0; transition: opacity 0.3s;
+  }
+  #progressWrap.active { opacity: 1; }
+  #progressBar {
+    width: 0%; height: 100%; background: linear-gradient(90deg, #666, #fff);
+    border-radius: 2px; transition: width 0.3s ease;
+  }
+  #loadStatus {
+    margin-top: 14px; font-size: 12px; color: rgba(255,255,255,0.4);
+    opacity: 0; transition: opacity 0.3s; text-align: center; line-height: 1.6;
+  }
+  #loadStatus.active { opacity: 1; }
+  #fileBadge {
+    margin-top: 16px; font-size: 12px; color: rgba(255,255,255,0.3);
+    opacity: 0; transition: opacity 0.3s;
+  }
+  #fileBadge.active { opacity: 1; }
+
+  /* ── Tour UI ── */
+  #tourUI { position: fixed; inset: 0; z-index: 100; pointer-events: none; opacity: 0; transition: opacity 0.5s; }
+  #tourUI.visible { opacity: 1; }
+  #tourUI > * { pointer-events: auto; }
+
+  #projectLabel {
+    position: absolute; top: 20px; left: 24px; font-size: 13px; font-weight: 600;
+    letter-spacing: 3px; text-transform: uppercase; color: rgba(255,255,255,0.7);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+  #fpsCounter {
+    position: absolute; top: 42px; left: 24px; font-size: 10px;
+    color: rgba(255,255,255,0.3); font-family: monospace;
+  }
+
+  #topRight { position: absolute; top: 16px; right: 20px; display: flex; gap: 8px; }
+  .uiBtn {
+    width: 40px; height: 40px; border-radius: 10px; border: none; cursor: pointer;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center; transition: background 0.2s;
+    position: relative;
+  }
+  .uiBtn:hover { background: rgba(0,0,0,0.65); }
+  .uiBtn svg { width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .uiBtn .tip {
+    position: absolute; top: 46px; right: 0; background: rgba(0,0,0,0.85);
+    padding: 4px 10px; border-radius: 4px; font-size: 10px; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .uiBtn:hover .tip { opacity: 1; }
+
+  #controlHint {
+    position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; color: rgba(255,255,255,0.5); background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(8px); padding: 10px 20px; border-radius: 8px;
+    transition: opacity 1s ease; text-align: center; line-height: 1.6;
+  }
+  #controlHint.fade { opacity: 0; }
+
+  /* Minimap */
+  #minimapWrap {
+    position: absolute; bottom: 20px; right: 20px; width: 180px; height: 180px;
+    border-radius: 12px; overflow: hidden; background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.08);
+    transition: opacity 0.3s;
+  }
+  #minimapWrap.hidden { opacity: 0; pointer-events: none; }
+  #minimapCanvas { width: 100%; height: 100%; }
+
+  /* Crosshair */
+  #crosshair {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: 6px; height: 6px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.5);
+    z-index: 101; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+  }
+  #crosshair.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- Loading Screen -->
+<div id="loadingScreen">
+  <h1>3D Home Tour</h1>
+  <input type="text" id="projectInput" placeholder="Project name" maxlength="60">
+  <div id="qualityRow">
+    <button class="qBtn" data-q="low">Low</button>
+    <button class="qBtn active" data-q="medium">Medium</button>
+    <button class="qBtn" data-q="high">High</button>
+    <button class="qBtn" data-q="ultra">Ultra</button>
+  </div>
+  <button id="selectBtn">
+    <svg viewBox="0 0 48 48" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5">
+      <path d="M24 32V12M24 12L16 20M24 12L32 20"/>
+      <path d="M8 32v4a4 4 0 004 4h24a4 4 0 004-4v-4"/>
+    </svg>
+    <span class="main">Click to select .glb file</span>
+    <span class="sub">Native file picker — supports large files</span>
+  </button>
+  <div id="fileBadge"></div>
+  <div id="progressWrap"><div id="progressBar"></div></div>
+  <div id="loadStatus"></div>
+</div>
+
+<!-- Tour UI -->
+<div id="tourUI">
+  <div id="projectLabel"></div>
+  <div id="fpsCounter"></div>
+  <div id="topRight">
+    <button class="uiBtn" id="btnFullscreen">
+      <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3"/></svg>
+      <span class="tip">Fullscreen</span>
+    </button>
+    <button class="uiBtn" id="btnReset">
+      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+      <span class="tip">Reset position</span>
+    </button>
+    <button class="uiBtn" id="btnMinimap">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>
+      <span class="tip">Minimap</span>
+    </button>
+  </div>
+  <div id="controlHint">
+    <strong>WASD / ZQSD</strong> — Move &nbsp;&bull;&nbsp; <strong>Mouse</strong> — Look &nbsp;&bull;&nbsp; <strong>Click</strong> — Teleport<br>
+    <strong>ESC</strong> — Release cursor &nbsp;&bull;&nbsp; Click to lock cursor
+  </div>
+  <div id="minimapWrap"><canvas id="minimapCanvas" width="360" height="360"></canvas></div>
+</div>
+
+<div id="crosshair"></div>
+<canvas id="renderCanvas"></canvas>
+
+<script>
+(function() {
+  /* ── Element refs ── */
+  const $ = id => document.getElementById(id);
+  const canvas        = $('renderCanvas');
+  const loadingScreen = $('loadingScreen');
+  const selectBtn     = $('selectBtn');
+  const progressWrap  = $('progressWrap');
+  const progressBar   = $('progressBar');
+  const loadStatus    = $('loadStatus');
+  const fileBadge     = $('fileBadge');
+  const tourUI        = $('tourUI');
+  const projectLabel  = $('projectLabel');
+  const controlHint   = $('controlHint');
+  const minimapWrap   = $('minimapWrap');
+  const minimapCanvas = $('minimapCanvas');
+  const crosshair     = $('crosshair');
+  const fpsCounter    = $('fpsCounter');
+
+  let engine, scene, camera, spawnPos, sceneBounds;
+  let minimapVisible = true, minimapData = null;
+  let qualityLevel = 'medium';
+
+  /* ── Quality profiles ── */
+  const Q = {
+    low:    { scale: 2.0, shadows: false, ssao: false, bloom: false, dof: false, samples: 1,  ssaoN: 8,  maxTex: 1024, freeze: true,  shadowRes: 512  },
+    medium: { scale: 1.5, shadows: false, ssao: false, bloom: true,  dof: false, samples: 4,  ssaoN: 16, maxTex: 2048, freeze: true,  shadowRes: 1024 },
+    high:   { scale: 1.0, shadows: true,  ssao: true,  bloom: true,  dof: false, samples: 4,  ssaoN: 16, maxTex: 4096, freeze: true,  shadowRes: 1024 },
+    ultra:  { scale: 1.0, shadows: true,  ssao: true,  bloom: true,  dof: true,  samples: 8,  ssaoN: 32, maxTex: 0,    freeze: false, shadowRes: 2048 },
+  };
+
+  /* ── Quality buttons ── */
+  document.querySelectorAll('.qBtn').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.qBtn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      qualityLevel = b.dataset.q;
+    });
+  });
+
+  /* ── Select file via native picker (Python backend) ── */
+  selectBtn.addEventListener('click', async () => {
+    selectBtn.querySelector('.main').textContent = 'Opening file picker...';
+    try {
+      const res = await fetch('/api/pick-file');
+      const data = await res.json();
+      if (data.ok) {
+        const mb = (data.size / (1024 * 1024)).toFixed(0);
+        fileBadge.textContent = data.name + ' — ' + mb + ' MB';
+        fileBadge.classList.add('active');
+        selectBtn.querySelector('.main').textContent = 'Loading...';
+        // Auto-adjust quality
+        if (data.size > 800 * 1024 * 1024 && ['ultra','high'].includes(qualityLevel)) {
+          qualityLevel = 'medium';
+          document.querySelectorAll('.qBtn').forEach(x => x.classList.remove('active'));
+          document.querySelector('[data-q="medium"]').classList.add('active');
+        } else if (data.size > 500 * 1024 * 1024 && qualityLevel === 'ultra') {
+          qualityLevel = 'high';
+          document.querySelectorAll('.qBtn').forEach(x => x.classList.remove('active'));
+          document.querySelector('[data-q="high"]').classList.add('active');
+        }
+        loadScene(data.name, data.size);
+      } else {
+        selectBtn.querySelector('.main').textContent = 'Click to select .glb file';
+      }
+    } catch(e) {
+      selectBtn.querySelector('.main').textContent = 'Error — is server.py running?';
+      console.error(e);
+    }
+  });
+
+  function setStatus(t) { loadStatus.textContent = t; }
+  function setProg(p) { progressBar.style.width = p + '%'; }
+
+  /* ── Load scene from server URL ── */
+  function loadScene(fileName, fileSize) {
+    const mb = (fileSize / (1024*1024)).toFixed(0);
+    progressWrap.classList.add('active');
+    loadStatus.classList.add('active');
+    setStatus('Initializing engine...');
+    setProg(5);
+
+    const q = Q[qualityLevel];
+
+    engine = new BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: false,
+      stencil: true,
+      antialias: q.samples > 1,
+      powerPreference: 'high-performance',
+      doNotHandleContextLost: true,
+    });
+    engine.setHardwareScalingLevel(q.scale);
+    if (q.maxTex > 0) {
+      engine.getCaps().maxTextureSize = Math.min(engine.getCaps().maxTextureSize, q.maxTex);
+    }
+
+    scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
+    scene.autoClear = false;
+    scene.autoClearDepthAndStencil = true;
+    scene.blockMaterialDirtyMechanism = true;
+
+    setProg(8);
+    setStatus('Loading environment lighting...');
+
+    // HDR environment
+    try {
+      scene.environmentTexture = BABYLON.CubeTexture.CreateFromPrefilteredData(
+        'https://assets.babylonjs.com/environments/environmentSpecular.env', scene
+      );
+      scene.environmentIntensity = 1.2;
+    } catch(e) { console.warn('Env failed:', e); }
+
+    setProg(12);
+    setStatus('Downloading 3D model (' + mb + ' MB)...');
+
+    // Load from server URL — streamed via HTTP, NOT a blob URL
+    BABYLON.SceneLoader.ImportMesh('', '/', 'model.glb', scene,
+      function onSuccess(meshes) {
+        setProg(70);
+        setStatus('Optimizing ' + meshes.length + ' objects...');
+        setTimeout(() => processMeshes(meshes), 50);
+      },
+      function onProgress(evt) {
+        if (evt.lengthComputable) {
+          const pct = 12 + (evt.loaded / evt.total) * 58;
+          setProg(Math.min(pct, 69));
+          const loadedMB = (evt.loaded / (1024*1024)).toFixed(0);
+          setStatus('Downloading... ' + loadedMB + ' / ' + mb + ' MB');
+        }
+      },
+      function onError(s, msg, ex) {
+        setStatus('Error loading model — check console');
+        setProg(0);
+        console.error('Load error:', msg, ex);
+      },
+      '.glb'
+    );
+  }
+
+  /* ── Process meshes in non-blocking batches ── */
+  function processMeshes(meshes) {
+    const q = Q[qualityLevel];
+    let totalVerts = 0;
+
+    // Compute bounds
+    let minV = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+    let maxV = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+    meshes.forEach(m => {
+      try {
+        const bi = m.getBoundingInfo();
+        const wn = bi.boundingBox.minimumWorld, wx = bi.boundingBox.maximumWorld;
+        if (isFinite(wn.x)) { minV = BABYLON.Vector3.Minimize(minV, wn); maxV = BABYLON.Vector3.Maximize(maxV, wx); }
+        if (m.getTotalVertices) totalVerts += m.getTotalVertices();
+      } catch(e) {}
+    });
+    sceneBounds = { min: minV, max: maxV };
+
+    setProg(72);
+    setStatus('Processing meshes (' + totalVerts.toLocaleString() + ' vertices)...');
+
+    // Batch processing
+    let idx = 0;
+    const batch = 80;
+    function step() {
+      const end = Math.min(idx + batch, meshes.length);
+      for (let i = idx; i < end; i++) {
+        const m = meshes[i];
+        if (m.material instanceof BABYLON.PBRMaterial) {
+          m.material.usePhysicalLightFalloff = true;
+        }
+        // Only large surfaces are pickable (floors, walls) — saves raycast cost
+        try {
+          const ext = m.getBoundingInfo().boundingBox.extendSizeWorld;
+          m.isPickable = (ext.x > 0.3 && ext.z > 0.3);
+        } catch(e) { m.isPickable = false; }
+        if (q.freeze && m.getTotalVertices && m.getTotalVertices() > 0) {
+          m.freezeWorldMatrix();
+        }
+      }
+      idx = end;
+      setProg(72 + (idx / meshes.length) * 12);
+      setStatus('Processing meshes... ' + idx + ' / ' + meshes.length);
+      if (idx < meshes.length) { setTimeout(step, 0); }
+      else { setTimeout(() => setupScene(meshes), 0); }
+    }
+    step();
+  }
+
+  /* ── Final scene setup ── */
+  function setupScene(meshes) {
+    const q = Q[qualityLevel];
+    const minV = sceneBounds.min, maxV = sceneBounds.max;
+
+    setProg(86);
+    setStatus('Setting up camera & lighting...');
+
+    // Camera
+    spawnPos = new BABYLON.Vector3((minV.x+maxV.x)/2, minV.y+1.65, (minV.z+maxV.z)/2);
+    camera = new BABYLON.UniversalCamera('cam', spawnPos.clone(), scene);
+    camera.attachControl(canvas, true);
+    camera.minZ = 0.1; camera.maxZ = 500;
+    camera.speed = 0.1; camera.inertia = 0.25; camera.angularSensibility = 1500;
+    camera.keysUp = [87,90]; camera.keysDown = [83]; camera.keysLeft = [65,81]; camera.keysRight = [68];
+
+    // Lights (if scene has none)
+    if (scene.lights.length === 0) {
+      const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0,1,0), scene);
+      hemi.intensity = 0.6;
+      if (q.shadows) {
+        const dir = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-0.5,-1,0.5), scene);
+        dir.position = new BABYLON.Vector3((maxV.x+minV.x)/2, maxV.y+5, (maxV.z+minV.z)/2);
+        dir.intensity = 0.8;
+        try {
+          const sg = new BABYLON.ShadowGenerator(q.shadowRes, dir);
+          sg.usePercentageCloserFiltering = true;
+          sg.filteringQuality = BABYLON.ShadowGenerator.QUALITY_LOW;
+          let n = 0;
+          meshes.forEach(m => {
+            if (n < 100 && m.getTotalVertices && m.getTotalVertices() > 100) {
+              sg.addShadowCaster(m); m.receiveShadows = true; n++;
+            }
+          });
+        } catch(e) {}
+      }
+    }
+
+    // Unblock materials + freeze for perf
+    scene.blockMaterialDirtyMechanism = false;
+    if (q.freeze) scene.materials.forEach(m => { try { m.freeze(); } catch(e) {} });
+
+    // Octree
+    try {
+      if (scene.meshes.length > 50) {
+        scene.createOrUpdateSelectionOctree(Math.min(Math.ceil(Math.log2(scene.meshes.length/8)), 6));
+      }
+    } catch(e) {}
+
+    setProg(92);
+    setStatus('Setting up rendering effects...');
+
+    // Post-processing
+    try {
+      const pp = new BABYLON.DefaultRenderingPipeline('pp', true, scene, [camera]);
+      pp.fxaaEnabled = true;
+      pp.samples = q.samples;
+      if (q.bloom) { pp.bloomEnabled = true; pp.bloomThreshold = 0.8; pp.bloomWeight = 0.3; }
+      if (q.dof) {
+        pp.depthOfFieldEnabled = true;
+        pp.depthOfField.focalLength = 150; pp.depthOfField.fStop = 1.4; pp.depthOfField.focusDistance = 2000;
+        pp.depthOfFieldBlurLevel = BABYLON.DepthOfFieldEffectBlurLevel.Low;
+      }
+      pp.imageProcessingEnabled = true;
+      pp.imageProcessing.toneMappingEnabled = true;
+      pp.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+      pp.imageProcessing.exposure = 1.1;
+      pp.imageProcessing.contrast = 1.15;
+    } catch(e) {}
+
+    if (q.ssao) {
+      try {
+        const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, { ssaoRatio: 0.4, blurRatio: 0.4 });
+        ssao.radius = 3; ssao.totalStrength = 1.2; ssao.samples = q.ssaoN; ssao.expensiveBlur = false;
+        scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline('ssao', camera);
+      } catch(e) {}
+    }
+
+    setProg(96);
+    buildMinimapCache();
+
+    // Pointer lock
+    canvas.addEventListener('click', () => { if (!document.pointerLockElement) canvas.requestPointerLock(); });
+    document.addEventListener('pointerlockchange', () => { crosshair.classList.toggle('visible', !!document.pointerLockElement); });
+
+    // Teleport
+    scene.onPointerDown = function(evt) {
+      if (evt.button !== 0 || !document.pointerLockElement) return;
+      const pick = scene.pick(scene.pointerX, scene.pointerY);
+      if (pick && pick.hit) {
+        const target = new BABYLON.Vector3(pick.pickedPoint.x, pick.pickedPoint.y + 1.65, pick.pickedPoint.z);
+        const start = camera.position.clone();
+        let f = 0;
+        const obs = scene.onBeforeRenderObservable.add(() => {
+          f++;
+          const t = f / 12, e = t*t*(3-2*t);
+          camera.position = BABYLON.Vector3.Lerp(start, target, e);
+          if (f >= 12) scene.onBeforeRenderObservable.remove(obs);
+        });
+      }
+    };
+
+    // Gravity (throttled)
+    let gf = 0;
+    scene.onBeforeRenderObservable.add(() => {
+      if (++gf % 3 !== 0) return;
+      const hit = scene.pickWithRay(new BABYLON.Ray(camera.position, BABYLON.Vector3.Down(), 50), m => m.isPickable);
+      if (hit && hit.hit) camera.position.y += (hit.pickedPoint.y + 1.65 - camera.position.y) * 0.3;
+    });
+
+    // Render loop
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener('resize', () => engine.resize());
+
+    setProg(100);
+    setStatus('Ready!');
+
+    setTimeout(() => {
+      loadingScreen.classList.add('hidden');
+      canvas.classList.add('visible');
+      tourUI.classList.add('visible');
+      projectLabel.textContent = $('projectInput').value.trim() || 'Home Tour';
+      setTimeout(() => controlHint.classList.add('fade'), 5000);
+      requestAnimationFrame(drawMinimap);
+      setInterval(() => { if (engine) fpsCounter.textContent = engine.getFps().toFixed(0) + ' FPS'; }, 500);
+    }, 300);
+  }
+
+  /* ── Minimap ── */
+  function buildMinimapCache() {
+    minimapData = [];
+    scene.meshes.forEach(m => {
+      try {
+        if (!m.isEnabled() || !m.isVisible) return;
+        const bi = m.getBoundingInfo();
+        const mn = bi.boundingBox.minimumWorld, mx = bi.boundingBox.maximumWorld;
+        const w = mx.x-mn.x, h = mx.z-mn.z;
+        if (w > 0.1 || h > 0.1) minimapData.push({ x:mn.x, z:mn.z, w, h });
+      } catch(e) {}
+    });
+  }
+
+  let mmFrame = 0;
+  function drawMinimap() {
+    mmFrame++;
+    if (mmFrame % 2 !== 0 || !minimapVisible || !camera || !minimapData) {
+      requestAnimationFrame(drawMinimap); return;
+    }
+    const ctx = minimapCanvas.getContext('2d');
+    const cw = minimapCanvas.width, ch = minimapCanvas.height;
+    ctx.clearRect(0, 0, cw, ch);
+    const b = sceneBounds;
+    const sx = b.max.x-b.min.x||1, sz = b.max.z-b.min.z||1;
+    const sc = Math.min((cw-20)/sx, (ch-20)/sz);
+    const ox = (cw-sx*sc)/2, oz = (ch-sz*sc)/2;
+
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.lineWidth = 0.5;
+    for (const d of minimapData) {
+      const rx = (d.x-b.min.x)*sc+ox, rz = (d.z-b.min.z)*sc+oz;
+      const rw = d.w*sc, rh = d.h*sc;
+      if (rw < 0.5 && rh < 0.5) continue;
+      ctx.fillRect(rx, rz, rw, rh);
+      ctx.strokeRect(rx, rz, rw, rh);
+    }
+    const px = (camera.position.x-b.min.x)*sc+ox;
+    const pz = (camera.position.z-b.min.z)*sc+oz;
+    const fw = camera.getDirection(BABYLON.Vector3.Forward());
+    const ang = Math.atan2(fw.x, fw.z);
+    ctx.save(); ctx.translate(px, pz); ctx.rotate(-ang);
+    ctx.beginPath(); ctx.moveTo(0,-8); ctx.lineTo(-5,6); ctx.lineTo(5,6); ctx.closePath();
+    ctx.fillStyle = '#e74c3c'; ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+    requestAnimationFrame(drawMinimap);
+  }
+
+  /* ── UI buttons ── */
+  $('btnFullscreen').addEventListener('click', () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+    else document.exitFullscreen().catch(()=>{});
+  });
+  $('btnReset').addEventListener('click', () => { if (camera && spawnPos) camera.position = spawnPos.clone(); });
+  $('btnMinimap').addEventListener('click', () => {
+    minimapVisible = !minimapVisible;
+    minimapWrap.classList.toggle('hidden', !minimapVisible);
+  });
+})();
+</script>
+</body>
+</html>

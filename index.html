@@ -45,8 +45,20 @@
   }
   #progressWrap.active { opacity: 1; }
   #progressBar { width: 0%; height: 100%; background: #fff; border-radius: 2px; transition: width 0.3s ease; }
-  #progressText { margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.3); opacity: 0; transition: opacity 0.3s; }
-  #progressText.active { opacity: 1; }
+  #loadStatus { margin-top: 12px; font-size: 12px; color: rgba(255,255,255,0.4); opacity: 0; transition: opacity 0.3s; text-align: center; line-height: 1.6; }
+  #loadStatus.active { opacity: 1; }
+
+  /* Quality selector */
+  #qualityRow {
+    display: flex; gap: 10px; margin-bottom: 24px;
+  }
+  .qualityBtn {
+    padding: 8px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15);
+    background: transparent; color: rgba(255,255,255,0.5); cursor: pointer;
+    font-size: 13px; transition: all 0.2s;
+  }
+  .qualityBtn:hover { border-color: rgba(255,255,255,0.4); color: #fff; }
+  .qualityBtn.active { border-color: #fff; color: #fff; background: rgba(255,255,255,0.1); }
 
   /* Tour UI */
   #tourUI { position: fixed; inset: 0; z-index: 100; pointer-events: none; opacity: 0; transition: opacity 0.5s; }
@@ -59,14 +71,26 @@
     text-shadow: 0 1px 4px rgba(0,0,0,0.5);
   }
 
+  #fpsCounter {
+    position: absolute; top: 42px; left: 24px; font-size: 10px;
+    color: rgba(255,255,255,0.3); font-family: monospace;
+  }
+
   #topRight { position: absolute; top: 16px; right: 20px; display: flex; gap: 8px; }
   .uiBtn {
     width: 40px; height: 40px; border-radius: 10px; border: none; cursor: pointer;
     background: rgba(0,0,0,0.45); backdrop-filter: blur(8px);
     display: flex; align-items: center; justify-content: center; transition: background 0.2s;
+    position: relative;
   }
   .uiBtn:hover { background: rgba(0,0,0,0.65); }
   .uiBtn svg { width: 18px; height: 18px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .uiBtn .tooltip {
+    position: absolute; top: 46px; right: 0; background: rgba(0,0,0,0.8);
+    padding: 4px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: opacity 0.2s;
+  }
+  .uiBtn:hover .tooltip { opacity: 1; }
 
   #controlHint {
     position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
@@ -101,6 +125,12 @@
 <div id="loadingScreen">
   <h1>3D Home Tour</h1>
   <input type="text" id="projectInput" placeholder="Project name" maxlength="60">
+  <div id="qualityRow">
+    <button class="qualityBtn" data-quality="low">Low</button>
+    <button class="qualityBtn active" data-quality="medium">Medium</button>
+    <button class="qualityBtn" data-quality="high">High</button>
+    <button class="qualityBtn" data-quality="ultra">Ultra</button>
+  </div>
   <div id="dropZone">
     <svg viewBox="0 0 48 48" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5">
       <path d="M24 32V12M24 12L16 20M24 12L32 20"/>
@@ -111,21 +141,25 @@
   </div>
   <input type="file" id="fileInput" accept=".glb,.gltf">
   <div id="progressWrap"><div id="progressBar"></div></div>
-  <p id="progressText">Loading model...</p>
+  <div id="loadStatus">Loading model...</div>
 </div>
 
 <!-- Tour UI -->
 <div id="tourUI">
   <div id="projectLabel"></div>
+  <div id="fpsCounter"></div>
   <div id="topRight">
     <button class="uiBtn" id="btnFullscreen" title="Fullscreen">
       <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3"/></svg>
+      <span class="tooltip">Fullscreen</span>
     </button>
     <button class="uiBtn" id="btnReset" title="Reset position">
       <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+      <span class="tooltip">Reset position</span>
     </button>
     <button class="uiBtn" id="btnMinimap" title="Toggle minimap">
       <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/></svg>
+      <span class="tooltip">Minimap</span>
     </button>
   </div>
   <div id="controlHint">
@@ -147,16 +181,85 @@
   const fileInput = $('fileInput');
   const progressWrap = $('progressWrap');
   const progressBar = $('progressBar');
-  const progressText = $('progressText');
+  const loadStatus = $('loadStatus');
   const tourUI = $('tourUI');
   const projectLabel = $('projectLabel');
   const controlHint = $('controlHint');
   const minimapWrap = $('minimapWrap');
   const minimapCanvas = $('minimapCanvas');
   const crosshair = $('crosshair');
+  const fpsCounter = $('fpsCounter');
 
   let engine, scene, camera, spawnPos, sceneBounds;
   let minimapVisible = true;
+  let minimapData = null; // cached minimap footprint
+  let qualityLevel = 'medium';
+  let pipeline = null;
+
+  // Quality profiles
+  const QUALITY = {
+    low: {
+      hardwareScaling: 2.0,    // half resolution
+      shadows: false,
+      shadowMapSize: 512,
+      ssao: false,
+      bloom: false,
+      dof: false,
+      fxaa: true,
+      samples: 1,
+      ssaoSamples: 8,
+      freezeMeshes: true,
+      maxTextureSize: 1024,
+    },
+    medium: {
+      hardwareScaling: 1.5,
+      shadows: false,
+      shadowMapSize: 1024,
+      ssao: false,
+      bloom: true,
+      dof: false,
+      fxaa: true,
+      samples: 4,
+      ssaoSamples: 16,
+      freezeMeshes: true,
+      maxTextureSize: 2048,
+    },
+    high: {
+      hardwareScaling: 1.0,
+      shadows: true,
+      shadowMapSize: 1024,
+      ssao: true,
+      bloom: true,
+      dof: false,
+      fxaa: true,
+      samples: 4,
+      ssaoSamples: 16,
+      freezeMeshes: true,
+      maxTextureSize: 4096,
+    },
+    ultra: {
+      hardwareScaling: 1.0,
+      shadows: true,
+      shadowMapSize: 2048,
+      ssao: true,
+      bloom: true,
+      dof: true,
+      fxaa: true,
+      samples: 8,
+      ssaoSamples: 32,
+      freezeMeshes: false,
+      maxTextureSize: 0, // no limit
+    }
+  };
+
+  // Quality selection
+  document.querySelectorAll('.qualityBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.qualityBtn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      qualityLevel = btn.dataset.quality;
+    });
+  });
 
   // Drop zone events
   dropZone.addEventListener('click', () => fileInput.click());
@@ -170,19 +273,64 @@
   });
   fileInput.addEventListener('change', e => { if (e.target.files[0]) loadModel(e.target.files[0]); });
 
+  function setStatus(text) {
+    loadStatus.textContent = text;
+  }
+
+  function setProgress(pct) {
+    progressBar.style.width = pct + '%';
+  }
+
   function loadModel(file) {
+    const fileSizeMB = (file.size / (1024 * 1024)).toFixed(0);
     progressWrap.classList.add('active');
-    progressText.classList.add('active');
-    progressBar.style.width = '10%';
+    loadStatus.classList.add('active');
+    setStatus('Reading file (' + fileSizeMB + ' MB)...');
+    setProgress(5);
 
+    // Auto-downgrade quality for very large files
+    if (file.size > 500 * 1024 * 1024 && qualityLevel === 'ultra') {
+      qualityLevel = 'high';
+      document.querySelectorAll('.qualityBtn').forEach(b => b.classList.remove('active'));
+      document.querySelector('[data-quality="high"]').classList.add('active');
+      setStatus('Auto-reduced to High quality for large file (' + fileSizeMB + ' MB)');
+    } else if (file.size > 800 * 1024 * 1024 && (qualityLevel === 'high' || qualityLevel === 'ultra')) {
+      qualityLevel = 'medium';
+      document.querySelectorAll('.qualityBtn').forEach(b => b.classList.remove('active'));
+      document.querySelector('[data-quality="medium"]').classList.add('active');
+      setStatus('Auto-reduced to Medium quality for very large file (' + fileSizeMB + ' MB)');
+    }
+
+    const q = QUALITY[qualityLevel];
     const url = URL.createObjectURL(file);
-    const fname = file.name;
 
-    engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true, antialias: true });
+    // Create engine with hardware scaling for performance
+    engine = new BABYLON.Engine(canvas, true, {
+      preserveDrawingBuffer: false,
+      stencil: true,
+      antialias: q.samples > 1,
+      powerPreference: 'high-performance',
+      doNotHandleContextLost: true,
+    });
+    engine.setHardwareScalingLevel(q.hardwareScaling);
+
+    // Limit texture size to save VRAM
+    if (q.maxTextureSize > 0) {
+      engine.getCaps().maxTextureSize = Math.min(engine.getCaps().maxTextureSize, q.maxTextureSize);
+    }
+
     scene = new BABYLON.Scene(engine);
     scene.clearColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
 
-    progressBar.style.width = '25%';
+    // Disable auto-clear for perf
+    scene.autoClear = false;
+    scene.autoClearDepthAndStencil = true;
+
+    // Block material dirty flags during load
+    scene.blockMaterialDirtyMechanism = true;
+
+    setProgress(10);
+    setStatus('Loading environment...');
 
     // Load HDR environment
     try {
@@ -193,249 +341,368 @@
       scene.environmentIntensity = 1.2;
     } catch(e) { console.warn('Env texture failed:', e); }
 
-    progressBar.style.width = '35%';
+    setProgress(15);
+    setStatus('Loading 3D model (' + fileSizeMB + ' MB)... This may take a moment.');
 
     BABYLON.SceneLoader.ImportMesh('', '', url, scene,
       function onSuccess(meshes) {
-        progressBar.style.width = '80%';
         URL.revokeObjectURL(url);
+        setProgress(70);
+        setStatus('Optimizing scene (' + meshes.length + ' objects)...');
 
-        // Compute scene bounds
-        let minV = new BABYLON.Vector3(Infinity, Infinity, Infinity);
-        let maxV = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
-        meshes.forEach(m => {
-          if (!m.getBoundingInfo) return;
-          const bi = m.getBoundingInfo();
-          const wmin = bi.boundingBox.minimumWorld;
-          const wmax = bi.boundingBox.maximumWorld;
-          minV = BABYLON.Vector3.Minimize(minV, wmin);
-          maxV = BABYLON.Vector3.Maximize(maxV, wmax);
-        });
-        sceneBounds = { min: minV, max: maxV };
-
-        // Force PBR on all meshes
-        meshes.forEach(m => {
-          if (m.material && m.material instanceof BABYLON.PBRMaterial) {
-            m.material.usePhysicalLightFalloff = true;
-          }
-          m.isPickable = true;
-        });
-
-        // Setup camera
-        const cx = (minV.x + maxV.x) / 2;
-        const cz = (minV.z + maxV.z) / 2;
-        const cy = minV.y + 1.65;
-        spawnPos = new BABYLON.Vector3(cx, cy, cz);
-
-        camera = new BABYLON.UniversalCamera('cam', spawnPos.clone(), scene);
-        camera.attachControl(canvas, true);
-        camera.minZ = 0.05;
-        camera.maxZ = 1000;
-        camera.speed = 0.1;
-        camera.inertia = 0.25;
-        camera.angularSensibility = 1500;
-
-        // WASD + ZQSD
-        camera.keysUp = [87, 90]; // W, Z
-        camera.keysDown = [83];    // S
-        camera.keysLeft = [65, 81]; // A, Q
-        camera.keysRight = [68];    // D
-
-        // Add default light if scene has none
-        const hasLights = scene.lights.length > 0;
-        if (!hasLights) {
-          const dirLight = new BABYLON.DirectionalLight('dirLight', new BABYLON.Vector3(-0.5, -1, 0.5), scene);
-          dirLight.position = new BABYLON.Vector3(
-            (maxV.x + minV.x) / 2,
-            maxV.y + 5,
-            (maxV.z + minV.z) / 2
-          );
-          dirLight.intensity = 1.0;
-
-          // Shadow generator
-          try {
-            const sg = new BABYLON.ShadowGenerator(2048, dirLight);
-            sg.usePercentageCloserFiltering = true;
-            sg.filteringQuality = BABYLON.ShadowGenerator.QUALITY_MEDIUM;
-            meshes.forEach(m => {
-              if (m.getTotalVertices && m.getTotalVertices() > 0) {
-                sg.addShadowCaster(m);
-                m.receiveShadows = true;
-              }
-            });
-          } catch(e) { console.warn('Shadow setup failed:', e); }
-
-          // Hemisphere fill light
-          const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
-          hemi.intensity = 0.4;
-        }
-
-        progressBar.style.width = '90%';
-
-        // Post-processing pipeline
-        try {
-          const pipeline = new BABYLON.DefaultRenderingPipeline('default', true, scene, [camera]);
-          pipeline.fxaaEnabled = true;
-          pipeline.samples = 8;
-
-          pipeline.bloomEnabled = true;
-          pipeline.bloomThreshold = 0.8;
-          pipeline.bloomWeight = 0.3;
-
-          pipeline.depthOfFieldEnabled = true;
-          pipeline.depthOfField.focalLength = 150;
-          pipeline.depthOfField.fStop = 1.4;
-          pipeline.depthOfField.focusDistance = 2000;
-          pipeline.depthOfFieldBlurLevel = BABYLON.DepthOfFieldEffectBlurLevel.Medium;
-
-          pipeline.imageProcessingEnabled = true;
-          pipeline.imageProcessing.toneMappingEnabled = true;
-          pipeline.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
-          pipeline.imageProcessing.exposure = 1.1;
-          pipeline.imageProcessing.contrast = 1.15;
-          pipeline.imageProcessing.colorCurvesEnabled = true;
-          const curves = new BABYLON.ColorCurves();
-          curves.globalSaturation = 10;
-          pipeline.imageProcessing.colorCurves = curves;
-        } catch(e) { console.warn('Rendering pipeline failed:', e); }
-
-        // SSAO2
-        try {
-          const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {
-            ssaoRatio: 0.5,
-            blurRatio: 0.5
-          });
-          ssao.radius = 4;
-          ssao.totalStrength = 1.3;
-          ssao.samples = 32;
-          ssao.expensiveBlur = true;
-          scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline('ssao', camera);
-        } catch(e) { console.warn('SSAO2 failed:', e); }
-
-        progressBar.style.width = '100%';
-
-        // Pointer lock
-        canvas.addEventListener('click', () => {
-          if (!document.pointerLockElement) {
-            canvas.requestPointerLock();
-          }
-        });
-        document.addEventListener('pointerlockchange', () => {
-          crosshair.classList.toggle('visible', !!document.pointerLockElement);
-        });
-
-        // Click-to-teleport
-        scene.onPointerDown = function(evt, pickResult) {
-          if (evt.button !== 0) return;
-          if (!document.pointerLockElement) return;
-          const pick = scene.pick(scene.pointerX, scene.pointerY);
-          if (pick.hit) {
-            const target = new BABYLON.Vector3(pick.pickedPoint.x, pick.pickedPoint.y + 1.65, pick.pickedPoint.z);
-            const startPos = camera.position.clone();
-            let frame = 0;
-            const totalFrames = 12;
-            const anim = scene.onBeforeRenderObservable.add(() => {
-              frame++;
-              const t = frame / totalFrames;
-              const ease = t * t * (3 - 2 * t); // smoothstep
-              camera.position = BABYLON.Vector3.Lerp(startPos, target, ease);
-              if (frame >= totalFrames) {
-                scene.onBeforeRenderObservable.remove(anim);
-              }
-            });
-          }
-        };
-
-        // Gravity — downward raycast each frame
-        scene.onBeforeRenderObservable.add(() => {
-          const ray = new BABYLON.Ray(
-            new BABYLON.Vector3(camera.position.x, camera.position.y, camera.position.z),
-            new BABYLON.Vector3(0, -1, 0),
-            50
-          );
-          const hit = scene.pickWithRay(ray, m => m.isPickable && m !== camera);
-          if (hit && hit.hit) {
-            const desiredY = hit.pickedPoint.y + 1.65;
-            camera.position.y += (desiredY - camera.position.y) * 0.2;
-          }
-        });
-
-        // Start render loop
-        engine.runRenderLoop(() => scene.render());
-        window.addEventListener('resize', () => engine.resize());
-
-        // Transition
-        setTimeout(() => {
-          loadingScreen.classList.add('hidden');
-          canvas.classList.add('visible');
-          tourUI.classList.add('visible');
-
-          const name = $('projectInput').value.trim();
-          projectLabel.textContent = name || 'Home Tour';
-
-          // Fade control hint
-          setTimeout(() => controlHint.classList.add('fade'), 5000);
-
-          // Minimap loop
-          requestAnimationFrame(updateMinimap);
-        }, 400);
+        // Use setTimeout to let the UI update
+        setTimeout(() => processScene(meshes), 50);
       },
       function onProgress(evt) {
         if (evt.lengthComputable) {
-          const pct = 35 + (evt.loaded / evt.total) * 45;
-          progressBar.style.width = pct + '%';
+          const pct = 15 + (evt.loaded / evt.total) * 55;
+          setProgress(Math.min(pct, 69));
+          const loadedMB = (evt.loaded / (1024 * 1024)).toFixed(0);
+          setStatus('Loading 3D model... ' + loadedMB + ' / ' + fileSizeMB + ' MB');
         }
       },
       function onError(scene, msg, ex) {
-        progressText.textContent = 'Error loading model. Please try a different .glb file.';
-        progressBar.style.width = '0%';
+        setStatus('Error loading model. Check console for details.');
+        setProgress(0);
         console.error('Load error:', msg, ex);
       },
       '.glb'
     );
   }
 
-  // Minimap
-  function updateMinimap() {
-    if (!scene || !camera || !minimapVisible) {
-      requestAnimationFrame(updateMinimap);
-      return;
+  function processScene(meshes) {
+    const q = QUALITY[qualityLevel];
+
+    setProgress(72);
+    setStatus('Computing scene bounds...');
+
+    // Compute scene bounds
+    let minV = new BABYLON.Vector3(Infinity, Infinity, Infinity);
+    let maxV = new BABYLON.Vector3(-Infinity, -Infinity, -Infinity);
+    let totalVertices = 0;
+    meshes.forEach(m => {
+      if (!m.getBoundingInfo) return;
+      try {
+        const bi = m.getBoundingInfo();
+        const wmin = bi.boundingBox.minimumWorld;
+        const wmax = bi.boundingBox.maximumWorld;
+        if (isFinite(wmin.x) && isFinite(wmax.x)) {
+          minV = BABYLON.Vector3.Minimize(minV, wmin);
+          maxV = BABYLON.Vector3.Maximize(maxV, wmax);
+        }
+        if (m.getTotalVertices) totalVertices += m.getTotalVertices();
+      } catch(e) {}
+    });
+    sceneBounds = { min: minV, max: maxV };
+
+    setProgress(75);
+    setStatus('Optimizing meshes (' + totalVertices.toLocaleString() + ' vertices)...');
+
+    setTimeout(() => {
+      // Process meshes in batches to avoid blocking
+      let idx = 0;
+      const batchSize = 50;
+
+      function processBatch() {
+        const end = Math.min(idx + batchSize, meshes.length);
+        for (let i = idx; i < end; i++) {
+          const m = meshes[i];
+          // Force PBR settings
+          if (m.material && m.material instanceof BABYLON.PBRMaterial) {
+            m.material.usePhysicalLightFalloff = true;
+          }
+
+          // Only make floor-like meshes pickable (for teleport + gravity)
+          // Small objects are not pickable to save raycast perf
+          if (m.getBoundingInfo) {
+            try {
+              const ext = m.getBoundingInfo().boundingBox.extendSizeWorld;
+              const isLargeEnough = (ext.x > 0.3 && ext.z > 0.3);
+              m.isPickable = isLargeEnough;
+            } catch(e) {
+              m.isPickable = false;
+            }
+          }
+
+          // Freeze world matrix for static meshes
+          if (q.freezeMeshes && m.getTotalVertices && m.getTotalVertices() > 0) {
+            m.freezeWorldMatrix();
+          }
+        }
+        idx = end;
+        const pct = 75 + (idx / meshes.length) * 10;
+        setProgress(Math.min(pct, 84));
+        setStatus('Optimizing meshes... ' + idx + ' / ' + meshes.length);
+
+        if (idx < meshes.length) {
+          setTimeout(processBatch, 0);
+        } else {
+          setTimeout(() => finishSetup(meshes), 0);
+        }
+      }
+      processBatch();
+    }, 50);
+  }
+
+  function finishSetup(meshes) {
+    const q = QUALITY[qualityLevel];
+    const minV = sceneBounds.min;
+    const maxV = sceneBounds.max;
+
+    setProgress(85);
+    setStatus('Setting up camera...');
+
+    // Setup camera
+    const cx = (minV.x + maxV.x) / 2;
+    const cz = (minV.z + maxV.z) / 2;
+    const cy = minV.y + 1.65;
+    spawnPos = new BABYLON.Vector3(cx, cy, cz);
+
+    camera = new BABYLON.UniversalCamera('cam', spawnPos.clone(), scene);
+    camera.attachControl(canvas, true);
+    camera.minZ = 0.1;
+    camera.maxZ = 500;
+    camera.speed = 0.1;
+    camera.inertia = 0.25;
+    camera.angularSensibility = 1500;
+
+    // WASD + ZQSD
+    camera.keysUp = [87, 90];
+    camera.keysDown = [83];
+    camera.keysLeft = [65, 81];
+    camera.keysRight = [68];
+
+    setProgress(88);
+    setStatus('Setting up lighting...');
+
+    // Add lights if scene has none
+    if (scene.lights.length === 0) {
+      const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+      hemi.intensity = 0.6;
+
+      if (q.shadows) {
+        const dirLight = new BABYLON.DirectionalLight('dirLight', new BABYLON.Vector3(-0.5, -1, 0.5), scene);
+        dirLight.position = new BABYLON.Vector3(
+          (maxV.x + minV.x) / 2, maxV.y + 5, (maxV.z + minV.z) / 2
+        );
+        dirLight.intensity = 0.8;
+
+        try {
+          const sg = new BABYLON.ShadowGenerator(q.shadowMapSize, dirLight);
+          sg.usePercentageCloserFiltering = true;
+          sg.filteringQuality = BABYLON.ShadowGenerator.QUALITY_LOW;
+          // Only add large meshes as shadow casters
+          let shadowCasters = 0;
+          meshes.forEach(m => {
+            if (m.getTotalVertices && m.getTotalVertices() > 100 && shadowCasters < 100) {
+              sg.addShadowCaster(m);
+              m.receiveShadows = true;
+              shadowCasters++;
+            }
+          });
+        } catch(e) { console.warn('Shadow setup failed:', e); }
+      }
     }
+
+    setProgress(90);
+    setStatus('Setting up rendering...');
+
+    // Re-enable material dirty mechanism
+    scene.blockMaterialDirtyMechanism = false;
+
+    // Freeze materials for perf
+    if (q.freezeMeshes) {
+      scene.materials.forEach(mat => {
+        try { mat.freeze(); } catch(e) {}
+      });
+    }
+
+    // Create octree for fast picking
+    try {
+      const worldSize = BABYLON.Vector3.Distance(minV, maxV);
+      const depth = Math.min(Math.ceil(Math.log2(scene.meshes.length / 8)), 6);
+      if (scene.meshes.length > 50) {
+        scene.createOrUpdateSelectionOctree(Math.max(depth, 2));
+      }
+    } catch(e) { console.warn('Octree failed:', e); }
+
+    // Post-processing — minimal for large scenes
+    try {
+      pipeline = new BABYLON.DefaultRenderingPipeline('default', true, scene, [camera]);
+      pipeline.fxaaEnabled = q.fxaa;
+      pipeline.samples = q.samples;
+
+      if (q.bloom) {
+        pipeline.bloomEnabled = true;
+        pipeline.bloomThreshold = 0.8;
+        pipeline.bloomWeight = 0.3;
+      }
+
+      if (q.dof) {
+        pipeline.depthOfFieldEnabled = true;
+        pipeline.depthOfField.focalLength = 150;
+        pipeline.depthOfField.fStop = 1.4;
+        pipeline.depthOfField.focusDistance = 2000;
+        pipeline.depthOfFieldBlurLevel = BABYLON.DepthOfFieldEffectBlurLevel.Low;
+      }
+
+      pipeline.imageProcessingEnabled = true;
+      pipeline.imageProcessing.toneMappingEnabled = true;
+      pipeline.imageProcessing.toneMappingType = BABYLON.ImageProcessingConfiguration.TONEMAPPING_ACES;
+      pipeline.imageProcessing.exposure = 1.1;
+      pipeline.imageProcessing.contrast = 1.15;
+    } catch(e) { console.warn('Rendering pipeline failed:', e); }
+
+    // SSAO2
+    if (q.ssao) {
+      try {
+        const ssao = new BABYLON.SSAO2RenderingPipeline('ssao', scene, {
+          ssaoRatio: 0.4,
+          blurRatio: 0.4
+        });
+        ssao.radius = 3;
+        ssao.totalStrength = 1.2;
+        ssao.samples = q.ssaoSamples;
+        ssao.expensiveBlur = false;
+        scene.postProcessRenderPipelineManager.attachCamerasToRenderPipeline('ssao', camera);
+      } catch(e) { console.warn('SSAO2 failed:', e); }
+    }
+
+    setProgress(95);
+    setStatus('Almost ready...');
+
+    // Cache minimap footprints once
+    buildMinimapCache();
+
+    // Pointer lock
+    canvas.addEventListener('click', () => {
+      if (!document.pointerLockElement) {
+        canvas.requestPointerLock();
+      }
+    });
+    document.addEventListener('pointerlockchange', () => {
+      crosshair.classList.toggle('visible', !!document.pointerLockElement);
+    });
+
+    // Click-to-teleport (only when pointer locked)
+    scene.onPointerDown = function(evt) {
+      if (evt.button !== 0 || !document.pointerLockElement) return;
+      const pick = scene.pick(scene.pointerX, scene.pointerY);
+      if (pick && pick.hit) {
+        const target = new BABYLON.Vector3(pick.pickedPoint.x, pick.pickedPoint.y + 1.65, pick.pickedPoint.z);
+        const startPos = camera.position.clone();
+        let frame = 0;
+        const totalFrames = 12;
+        const anim = scene.onBeforeRenderObservable.add(() => {
+          frame++;
+          const t = frame / totalFrames;
+          const ease = t * t * (3 - 2 * t);
+          camera.position = BABYLON.Vector3.Lerp(startPos, target, ease);
+          if (frame >= totalFrames) scene.onBeforeRenderObservable.remove(anim);
+        });
+      }
+    };
+
+    // Gravity — downward raycast (throttled)
+    let gravityFrame = 0;
+    scene.onBeforeRenderObservable.add(() => {
+      gravityFrame++;
+      if (gravityFrame % 3 !== 0) return; // every 3rd frame
+      const ray = new BABYLON.Ray(camera.position, BABYLON.Vector3.Down(), 50);
+      const hit = scene.pickWithRay(ray, m => m.isPickable);
+      if (hit && hit.hit) {
+        const desiredY = hit.pickedPoint.y + 1.65;
+        camera.position.y += (desiredY - camera.position.y) * 0.3;
+      }
+    });
+
+    // Start render loop
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener('resize', () => engine.resize());
+
+    setProgress(100);
+    setStatus('Ready!');
+
+    // Transition to scene
+    setTimeout(() => {
+      loadingScreen.classList.add('hidden');
+      canvas.classList.add('visible');
+      tourUI.classList.add('visible');
+
+      const name = $('projectInput').value.trim();
+      projectLabel.textContent = name || 'Home Tour';
+
+      setTimeout(() => controlHint.classList.add('fade'), 5000);
+
+      // Start minimap & FPS
+      requestAnimationFrame(updateMinimap);
+      setInterval(() => {
+        if (engine) fpsCounter.textContent = engine.getFps().toFixed(0) + ' FPS';
+      }, 500);
+    }, 300);
+  }
+
+  // Build minimap cache (compute once, not every frame)
+  function buildMinimapCache() {
+    minimapData = [];
+    scene.meshes.forEach(m => {
+      if (!m.getBoundingInfo || !m.isEnabled() || !m.isVisible) return;
+      try {
+        const bi = m.getBoundingInfo();
+        const mn = bi.boundingBox.minimumWorld;
+        const mx = bi.boundingBox.maximumWorld;
+        const w = mx.x - mn.x;
+        const h = mx.z - mn.z;
+        if (w < 0.1 && h < 0.1) return;
+        minimapData.push({ x: mn.x, z: mn.z, w: w, h: h });
+      } catch(e) {}
+    });
+  }
+
+  // Minimap — uses cached footprint data
+  let minimapFrame = 0;
+  function updateMinimap() {
+    if (!scene || !camera) { requestAnimationFrame(updateMinimap); return; }
+
+    minimapFrame++;
+    // Update minimap every 2 frames to save CPU
+    if (minimapFrame % 2 !== 0) { requestAnimationFrame(updateMinimap); return; }
+    if (!minimapVisible) { requestAnimationFrame(updateMinimap); return; }
+
     const ctx = minimapCanvas.getContext('2d');
-    const w = minimapCanvas.width;
-    const h = minimapCanvas.height;
-    ctx.clearRect(0, 0, w, h);
+    const cw = minimapCanvas.width;
+    const ch = minimapCanvas.height;
+    ctx.clearRect(0, 0, cw, ch);
+
+    if (!minimapData || !sceneBounds) { requestAnimationFrame(updateMinimap); return; }
 
     const b = sceneBounds;
     const sx = b.max.x - b.min.x || 1;
     const sz = b.max.z - b.min.z || 1;
-    const scale = Math.min((w - 20) / sx, (h - 20) / sz);
+    const scale = Math.min((cw - 20) / sx, (ch - 20) / sz);
+    const offX = (cw - sx * scale) / 2;
+    const offZ = (ch - sz * scale) / 2;
 
-    const toX = x => (x - b.min.x) * scale + (w - sx * scale) / 2;
-    const toZ = z => (z - b.min.z) * scale + (h - sz * scale) / 2;
-
-    // Draw mesh footprints
+    // Draw cached footprints
     ctx.fillStyle = 'rgba(255,255,255,0.12)';
     ctx.strokeStyle = 'rgba(255,255,255,0.2)';
     ctx.lineWidth = 0.5;
-    scene.meshes.forEach(m => {
-      if (!m.getBoundingInfo || !m.isEnabled() || !m.isVisible) return;
-      const bi = m.getBoundingInfo();
-      const mn = bi.boundingBox.minimumWorld;
-      const mx = bi.boundingBox.maximumWorld;
-      const rx = toX(mn.x);
-      const rz = toZ(mn.z);
-      const rw = (mx.x - mn.x) * scale;
-      const rh = (mx.z - mn.z) * scale;
-      if (rw < 1 && rh < 1) return;
+    for (let i = 0; i < minimapData.length; i++) {
+      const d = minimapData[i];
+      const rx = (d.x - b.min.x) * scale + offX;
+      const rz = (d.z - b.min.z) * scale + offZ;
+      const rw = d.w * scale;
+      const rh = d.h * scale;
+      if (rw < 0.5 && rh < 0.5) continue;
       ctx.fillRect(rx, rz, rw, rh);
       ctx.strokeRect(rx, rz, rw, rh);
-    });
+    }
 
-    // Draw player
-    const px = toX(camera.position.x);
-    const pz = toZ(camera.position.z);
-    const angle = Math.atan2(camera.getDirection(BABYLON.Vector3.Forward()).x, camera.getDirection(BABYLON.Vector3.Forward()).z);
+    // Draw player arrow
+    const px = (camera.position.x - b.min.x) * scale + offX;
+    const pz = (camera.position.z - b.min.z) * scale + offZ;
+    const fwd = camera.getDirection(BABYLON.Vector3.Forward());
+    const angle = Math.atan2(fwd.x, fwd.z);
 
     ctx.save();
     ctx.translate(px, pz);
@@ -465,9 +732,7 @@
   });
 
   $('btnReset').addEventListener('click', () => {
-    if (camera && spawnPos) {
-      camera.position = spawnPos.clone();
-    }
+    if (camera && spawnPos) camera.position = spawnPos.clone();
   });
 
   $('btnMinimap').addEventListener('click', () => {
